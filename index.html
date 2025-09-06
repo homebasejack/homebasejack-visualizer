@@ -166,7 +166,543 @@
     </div>
 
     <script>
-        // ... (Include your full JavaScript code here. See your original post for the full content.)
+        // DOM Elements
+        const promptInput = document.getElementById('promptInput');
+        const visualizeBtn = document.getElementById('visualizeBtn');
+        const suggestBtn = document.getElementById('suggestBtn');
+        const enhanceBtn = document.getElementById('enhanceBtn');
+        const buttonText = document.getElementById('button-text');
+        const buttonIcon = document.getElementById('button-icon');
+        const outputSection = document.getElementById('outputSection');
+        const imageLoader = document.getElementById('imageLoader');
+        const textLoader = document.getElementById('textLoader');
+        const generatedImage = document.getElementById('generatedImage');
+        const variationBtn = document.getElementById('variationBtn');
+        const variationBtnText = document.getElementById('variationBtn-text');
+        const generatedText = document.getElementById('generatedText');
+        const errorMessage = document.getElementById('errorMessage');
+        const dreamBtn = document.getElementById('dreamBtn');
+        const listenBtn = document.getElementById('listenBtn');
+        const dreamModal = document.getElementById('dreamModal');
+        const closeModalBtn = document.getElementById('closeModalBtn');
+        const copyDreamBtn = document.getElementById('copyDreamBtn');
+        const dreamContent = document.getElementById('dreamContent');
+        const dreamText = document.getElementById('dreamText');
+        const dreamLoader = document.getElementById('dreamLoader');
+        const personaContainer = document.getElementById('personaContainer');
+        const personaBtns = document.querySelectorAll('.persona-btn');
+
+        // Slideshow elements
+        const prevBtn = document.getElementById('prevBtn');
+        const nextBtn = document.getElementById('nextBtn');
+        const indicatorContainer = document.getElementById('indicatorContainer');
+
+        const apiKey = ""; // API key is handled by the environment
+        let currentAudio = null;
+        let currentPrompt = '';
+
+        // Slideshow state
+        let currentImageIndex = 0;
+        let generatedImageUrls = [];
+        
+        // --- API Call Functions ---
+
+        async function fetchWithBackoff(url, options, maxRetries = 5) {
+            let delay = 1000;
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (!response.ok) {
+                        const errorBody = await response.text();
+                        console.error(`API Error (attempt ${i + 1}):`, response.status, errorBody);
+                        if (response.status === 429 || response.status >= 500) {
+                           throw new Error(`Server error or rate limited: ${response.status}`);
+                        }
+                         throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                } catch (error) {
+                    console.error(`Attempt ${i + 1} failed:`, error.message);
+                    if (i === maxRetries - 1) throw error;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    delay *= 2;
+                }
+            }
+        }
+        
+        async function generateImage(prompt, sampleCount = 4) {
+            const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`;
+            const watermarkDescription = "In the bottom-left corner, add a small, subtle, and translucent watermark. The watermark should be the letters 'hbj' in a subtle, stylized font."
+            const finalPrompt = `cinematic, professional photograph of: ${prompt}. ${watermarkDescription}`;
+            
+            const payload = {
+                instances: [{ prompt: finalPrompt }],
+                parameters: { "sampleCount": sampleCount }
+            };
+            const result = await fetchWithBackoff(API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (result.predictions && Array.isArray(result.predictions) && result.predictions.length > 0) {
+                return result.predictions.map(pred => `data:image/png;base64,${pred.bytesBase64Encoded}`);
+            }
+            throw new Error("Invalid image response from API. The response may have been empty or blocked.");
+        }
+
+        async function generateText(prompt, persona = 'philosopher') {
+            const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+             const personas = {
+                 philosopher: "You are a neuro-philosopher AI. Your role is to analyze concepts as if they were raw thoughts. Provide a concise, insightful, and slightly poetic analysis in a single paragraph. Do not use markdown or lists.",
+                 poet: "You are a renowned poet. Analyze the concept and express its essence in the form of a short, evocative poem (like a haiku, quatrain, or free verse). Do not provide any explanation, only the poem itself.",
+                 scientist: "You are an accessible science communicator like Carl Sagan. Analyze the concept from a scientific perspective (e.g., physics, biology, psychology). Explain a core principle related to it in a single, easy-to-understand paragraph. Avoid jargon and make it inspiring."
+             };
+            const systemPrompt = personas[persona];
+
+            const payload = {
+                contents: [{ parts: [{ text: `Analyze the concept: "${prompt}"` }] }],
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+            };
+            const result = await fetchWithBackoff(API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
+                return result.candidates[0].content.parts[0].text;
+            }
+            throw new Error("Invalid text response from API");
+        }
+        
+        async function enhancePrompt() {
+            const originalPrompt = promptInput.value.trim();
+            if (!originalPrompt) {
+                displayError("Please enter a concept to enhance.");
+                return;
+            }
+            enhanceBtn.disabled = true;
+            enhanceBtn.innerHTML = `<div class="w-5 h-5 border-2 border-gray-400 border-t-white rounded-full animate-spin"></div>`;
+
+            try {
+                const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+                const systemPrompt = `You are an expert image prompt engineer. Take the user's concept and expand it into a detailed, visually rich, and descriptive paragraph suitable for an AI image generator. Focus on cinematic lighting, composition, mood, and fine details. Do not add any preamble or quotation marks, just the enhanced prompt text.`;
+                const payload = {
+                    contents: [{ parts: [{ text: originalPrompt }] }],
+                    systemInstruction: { parts: [{ text: systemPrompt }] },
+                };
+                const result = await fetchWithBackoff(API_URL, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                });
+                if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
+                    promptInput.value = result.candidates[0].content.parts[0].text.trim();
+                } else {
+                    throw new Error("Could not enhance prompt.");
+                }
+            } catch (error) {
+                console.error("Prompt enhancement failed:", error);
+                displayError("Failed to enhance prompt.");
+            } finally {
+                enhanceBtn.disabled = false;
+                enhanceBtn.innerHTML = '✨ Enhance';
+            }
+        }
+
+        async function suggestIdea() {
+            suggestBtn.disabled = true;
+            suggestBtn.innerHTML = `<div class="w-5 h-5 border-2 border-gray-400 border-t-white rounded-full animate-spin"></div>`;
+            try {
+                const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+                const time = new Date().toLocaleString('en-US', { hour: 'numeric', minute: 'numeric', hour12: true });
+                const systemPrompt = `You are a creative muse. Based on the current time (${time}), generate one concise, intriguing, and visually rich prompt idea. It should be under 10 words. Respond with only the prompt text, no intro or extra text.`;
+                const payload = { contents: [{ parts: [{ text: "Suggest a creative prompt." }] }], systemInstruction: { parts: [{ text: systemPrompt }] }};
+                const result = await fetchWithBackoff(API_URL, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                });
+                if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
+                    promptInput.value = result.candidates[0].content.parts[0].text.trim().replace(/^"|"$/g, '');
+                } else { throw new Error("Could not generate suggestion."); }
+            } catch (error) {
+                console.error("Suggestion failed:", error);
+                displayError("Failed to get a suggestion.");
+            } finally {
+                suggestBtn.disabled = false;
+                suggestBtn.innerHTML = '✨';
+            }
+        }
+        
+        function parseDreamNarrative(text) {
+            const sections = {
+                Title: '', Introduction: '', Body: '', Conclusion: '', Fact: '', Tip: '', 'Call to Action': ''
+            };
+            const regex = /\*\*(Title|Introduction|Body|Conclusion|Fact|Tip|Call to Action):\*\*/g;
+            const parts = text.split(regex);
+            let currentSection = null;
+            for (const part of parts) {
+                const trimmedPart = part.trim();
+                if (sections.hasOwnProperty(trimmedPart)) {
+                    currentSection = trimmedPart;
+                } else if (currentSection) {
+                    sections[currentSection] += trimmedPart + '\n';
+                }
+            }
+
+            let html = '';
+            if (sections.Title) html += `<h4 class="text-2xl font-bangers text-yellow-400 mb-3">${sections.Title.trim()}</h4>`;
+            ['Introduction', 'Body', 'Conclusion'].forEach(sectionName => {
+                if (sections[sectionName]) {
+                    const paragraphs = sections[sectionName].trim().split('\n').filter(p => p.trim());
+                    html += paragraphs.map(p => `<p class="mb-4 text-gray-300">${p}</p>`).join('');
+                }
+            });
+            if (sections.Fact) html += `<div class="my-5 p-3 bg-gray-900/50 border-l-4 border-yellow-500 rounded-r-lg"><p class="font-bold text-yellow-300">Did you know?</p><p class="text-gray-300 text-sm">${sections.Fact.trim()}</p></div>`;
+            if (sections.Tip) html += `<div class="my-5 p-3 bg-gray-900/50 border-l-4 border-yellow-500 rounded-r-lg"><p class="font-bold text-yellow-300">💡 Creative Tip</p><p class="text-gray-300 text-sm">${sections.Tip.trim()}</p></div>`;
+            if (sections['Call to Action']) html += `<p class="mt-5 pt-4 border-t border-gray-700 text-center text-sm font-bold text-yellow-400 italic">${sections['Call to Action'].trim()}</p>`;
+            return html;
+        }
+
+        async function weaveDream() {
+            dreamBtn.disabled = true;
+            dreamText.innerHTML = '';
+            dreamLoader.classList.remove('hidden');
+            openModal();
+            try {
+                const analysisText = generatedText.textContent;
+                const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+                const systemPrompt = `You are a master storyteller and researcher AI. Your primary function is to generate a structured narrative based on a concept and an analysis. You MUST strictly adhere to the output format provided.
+
+**Task:**
+Take the provided "Original Concept" and "Analysis" and transform them into a complete, structured, dream-like narrative. You must also include a related fact, a creative tip, and a call to action.
+
+**Mandatory Output Structure:**
+Your entire response MUST be a single block of text following this exact format. Do NOT include any introductory text, apologies, or explanations outside of this structure. Use the bolded keywords exactly as shown.
+
+**Title:** [A captivating and short title for the dream]
+
+**Introduction:** [A single paragraph that sets the scene. It MUST begin with a compelling hook—an unusual question or a mysterious statement—to immediately draw the reader in. Then, introduce the core theme of the dream in an intriguing way.]
+
+**Body:** [Two to three longer, more descriptive paragraphs that explore the dream world in rich detail. Develop the narrative and delve into the surreal and symbolic aspects of the concept. Use vivid sensory details to make the experience feel real.]
+
+**Conclusion:** [A single paragraph that brings the dream to a thoughtful or poignant close, leaving a lasting impression.]
+
+**Fact:** [Use your search tool to find one fascinating, little-known trivia or fact directly related to the Original Concept. Present it as a single, interesting sentence. If the search tool does not return a relevant fact, state: "A fact about this concept remains as elusive as the dream itself."]
+
+**Tip:** [Provide a short, actionable creative or practical tip related to the Original Concept. For example, a photography tip, a writing prompt, or a mindfulness exercise.]
+
+**Call to Action:** [A short, engaging question or statement that prompts the user to reflect further. For example: "What does this dream mean to you? Share your vision." or "Dare to dream further? Visualize another concept."]`
+                const payload = {
+                    contents: [{ parts: [{ text: `Original Concept: "${currentPrompt}". Weave a dream from this analysis: "${analysisText}"` }] }],
+                    systemInstruction: { parts: [{ text: systemPrompt }] },
+                };
+                const result = await fetchWithBackoff(API_URL, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                });
+                if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
+                    const dreamStory = result.candidates[0].content.parts[0].text;
+                    dreamText.innerHTML = parseDreamNarrative(dreamStory);
+                } else { throw new Error("Could not weave dream."); }
+            } catch (error) {
+                console.error("Dream weaving failed:", error);
+                dreamText.innerHTML = '<p class="text-red-400 text-center">The dream faded before it could be recalled. Please try again.</p>';
+            } finally {
+                dreamBtn.disabled = false;
+                dreamLoader.classList.add('hidden');
+            }
+        }
+
+        async function generateAudio(text) {
+            listenBtn.disabled = true;
+            try {
+                if (currentAudio && !currentAudio.paused) {
+                    currentAudio.pause();
+                    currentAudio = null;
+                    listenBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>`;
+                    return;
+                }
+                listenBtn.innerHTML = `<div class="w-5 h-5 border-2 border-slate-400 border-t-white rounded-full animate-spin"></div>`;
+                const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
+                const payload = {
+                    contents: [{ parts: [{ text: `Read this in a calm, thoughtful voice: ${text}` }] }],
+                    generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Charon" } } } },
+                    model: "gemini-2.5-flash-preview-tts"
+                };
+                const result = await fetchWithBackoff(API_URL, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                });
+                const audioData = result?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+                if (audioData) {
+                    const pcmData = base64ToArrayBuffer(audioData);
+                    const pcm16 = new Int16Array(pcmData);
+                    const wavBlob = pcmToWav(pcm16, 24000);
+                    const audioUrl = URL.createObjectURL(wavBlob);
+                    currentAudio = new Audio(audioUrl);
+                    currentAudio.play();
+                    listenBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
+                    currentAudio.onended = () => {
+                         listenBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>`;
+                    };
+                } else { throw new Error("No audio data received."); }
+            } catch (error) {
+                console.error("Audio generation failed:", error);
+                displayError("Could not generate audio.");
+                 listenBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>`;
+            } finally {
+                listenBtn.disabled = false;
+            }
+        }
+
+        // --- Slideshow Functions ---
+        function setupSlideshow(urls) {
+            generatedImageUrls = urls;
+            currentImageIndex = 0;
+            indicatorContainer.innerHTML = '';
+            
+            urls.forEach((url, index) => {
+                const dot = document.createElement('button');
+                dot.className = 'w-2.5 h-2.5 bg-gray-600 rounded-full indicator-dot';
+                dot.dataset.index = index;
+                indicatorContainer.appendChild(dot);
+            });
+
+            prevBtn.classList.remove('hidden');
+            nextBtn.classList.remove('hidden');
+            showImage(0);
+        }
+
+        function showImage(index) {
+            if (index < 0 || index >= generatedImageUrls.length) return;
+            
+            currentImageIndex = index;
+            generatedImage.style.opacity = '0.5';
+            setTimeout(() => {
+                generatedImage.src = generatedImageUrls[currentImageIndex];
+                generatedImage.onload = () => {
+                     generatedImage.style.opacity = '1';
+                };
+            }, 200);
+
+            // Update dots
+            const dots = document.querySelectorAll('.indicator-dot');
+            dots.forEach((dot, i) => {
+                dot.classList.toggle('bg-yellow-400', i === currentImageIndex);
+                dot.classList.toggle('bg-gray-600', i !== currentImageIndex);
+            });
+
+            // Update buttons
+            prevBtn.disabled = currentImageIndex === 0;
+            nextBtn.disabled = currentImageIndex === generatedImageUrls.length - 1;
+        }
+
+        // --- UI and Event Handlers ---
+        
+        function showLoading(isLoading) {
+             visualizeBtn.disabled = isLoading;
+             if(isLoading) {
+                 buttonText.textContent = 'Visualizing...';
+                 buttonIcon.innerHTML = `<svg class="animate-spin -ml-1 mr-3 h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>`;
+                 outputSection.classList.add('opacity-0');
+                 errorMessage.classList.add('hidden');
+                 dreamBtn.classList.add('hidden');
+                 listenBtn.classList.add('hidden');
+                 variationBtn.classList.add('hidden');
+                 personaContainer.classList.add('hidden');
+                 prevBtn.classList.add('hidden');
+                 nextBtn.classList.add('hidden');
+                 indicatorContainer.innerHTML = '';
+             } else {
+                 buttonText.textContent = 'Visualize';
+                 buttonIcon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="mr-2"><path d="M9.06 2.22C8.45 2.58 8 3.24 8 4v16c0 .76.45 1.42 1.06 1.78C9.67 22.14 10.36 22 11 21.5l9-8a2 2 0 0 0 0-3l-9-8c-.64-.5-1.33-.64-1.94-.28Z"/><path d="M4 4v16"/></svg>`;
+             }
+        }
+        
+        function displayError(message) {
+            errorMessage.textContent = `An error occurred: ${message}. Please try again.`;
+            errorMessage.classList.remove('hidden');
+        }
+
+        function openModal() {
+            dreamModal.classList.remove('opacity-0', 'pointer-events-none');
+            dreamModal.querySelector('.modal-content').classList.remove('scale-95');
+        }
+
+        function closeModal() {
+            dreamModal.classList.add('opacity-0', 'pointer-events-none');
+            dreamModal.querySelector('.modal-content').classList.add('scale-95');
+        }
+
+        function copyDreamText() {
+            const textToCopy = dreamText.innerText;
+            const tempTextArea = document.createElement('textarea');
+            tempTextArea.value = textToCopy;
+            document.body.appendChild(tempTextArea);
+            tempTextArea.select();
+            try {
+                document.execCommand('copy');
+                const originalIcon = copyDreamBtn.innerHTML;
+                copyDreamBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="text-green-400"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+                setTimeout(() => {
+                    copyDreamBtn.innerHTML = originalIcon;
+                }, 2000);
+            } catch (err) {
+                console.error('Failed to copy text: ', err);
+            }
+            document.body.removeChild(tempTextArea);
+        }
+
+        visualizeBtn.addEventListener('click', async () => {
+            currentPrompt = promptInput.value.trim();
+            if (!currentPrompt) {
+                displayError("Please enter a concept to visualize.");
+                return;
+            }
+            
+            showLoading(true);
+            generatedText.classList.add('hidden');
+            imageLoader.classList.remove('hidden');
+            textLoader.classList.remove('hidden');
+
+            try {
+                const [imageUrls, textAnalysis] = await Promise.all([
+                    generateImage(currentPrompt, 4),
+                    generateText(currentPrompt, 'philosopher')
+                ]);
+
+                imageLoader.classList.add('hidden');
+                setupSlideshow(imageUrls);
+
+                generatedText.textContent = textAnalysis;
+                textLoader.classList.add('hidden');
+                generatedText.classList.remove('hidden');
+                
+                outputSection.classList.remove('opacity-0');
+                dreamBtn.classList.remove('hidden');
+                listenBtn.classList.remove('hidden');
+                variationBtn.classList.remove('hidden');
+                personaContainer.classList.remove('hidden');
+                personaBtns.forEach(btn => {
+                    btn.disabled = btn.dataset.persona === 'philosopher';
+                });
+
+
+            } catch (error) {
+                console.error("Visualization failed:", error);
+                displayError(error.message || "Could not generate visualization.");
+                imageLoader.classList.add('hidden');
+                textLoader.classList.add('hidden');
+                generatedImage.src="https://placehold.co/512x512/1a1a1a/facc15?text=Error";
+                generatedText.textContent = "Failed to generate AI analysis. Please check the console for details."
+            } finally {
+                showLoading(false);
+            }
+        });
+        
+        variationBtn.addEventListener('click', async () => {
+            variationBtn.disabled = true;
+            variationBtnText.textContent = 'Generating...';
+            imageLoader.classList.remove('hidden');
+
+            try {
+                const imageUrls = await generateImage(currentPrompt, 4);
+                imageLoader.classList.add('hidden');
+                setupSlideshow(imageUrls);
+            } catch (error) {
+                console.error("Variation generation failed:", error);
+                displayError(error.message || "Could not generate a variation.");
+                imageLoader.classList.add('hidden');
+            } finally {
+                variationBtn.disabled = false;
+                variationBtnText.textContent = 'Generate New Set';
+            }
+        });
+
+        personaBtns.forEach(button => {
+            button.addEventListener('click', async () => {
+                const persona = button.dataset.persona;
+                personaBtns.forEach(btn => btn.disabled = true);
+                generatedText.classList.add('hidden');
+                textLoader.classList.remove('hidden');
+                try {
+                    const textAnalysis = await generateText(currentPrompt, persona);
+                    generatedText.textContent = textAnalysis;
+                } catch (error) {
+                    console.error(`Failed to generate text for persona ${persona}:`, error);
+                    generatedText.textContent = `Failed to get the ${persona}'s perspective.`;
+                } finally {
+                    textLoader.classList.add('hidden');
+                    generatedText.classList.remove('hidden');
+                    personaBtns.forEach(btn => {
+                        btn.disabled = btn.dataset.persona === persona;
+                    });
+                }
+            });
+        });
+        
+        // Slideshow Event Listeners
+        prevBtn.addEventListener('click', () => showImage(currentImageIndex - 1));
+        nextBtn.addEventListener('click', () => showImage(currentImageIndex + 1));
+        indicatorContainer.addEventListener('click', (e) => {
+            if (e.target.matches('.indicator-dot')) {
+                showImage(parseInt(e.target.dataset.index));
+            }
+        });
+
+        promptInput.addEventListener('keypress', (event) => event.key === 'Enter' && visualizeBtn.click());
+        suggestBtn.addEventListener('click', suggestIdea);
+        enhanceBtn.addEventListener('click', enhancePrompt);
+        dreamBtn.addEventListener('click', weaveDream);
+        listenBtn.addEventListener('click', () => generateAudio(generatedText.textContent));
+        closeModalBtn.addEventListener('click', closeModal);
+        copyDreamBtn.addEventListener('click', copyDreamText);
+        dreamModal.addEventListener('click', (e) => e.target === dreamModal && closeModal());
+
+        // --- Audio Helper Functions ---
+        function base64ToArrayBuffer(base64) {
+            const binaryString = window.atob(base64);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            return bytes.buffer;
+        }
+
+        function pcmToWav(pcmData, sampleRate) {
+            const numChannels = 1;
+            const bytesPerSample = 2;
+            const blockAlign = numChannels * bytesPerSample;
+            const byteRate = sampleRate * blockAlign;
+            const dataSize = pcmData.length * bytesPerSample;
+            const buffer = new ArrayBuffer(44 + dataSize);
+            const view = new DataView(buffer);
+
+            function writeString(view, offset, string) {
+                for (let i = 0; i < string.length; i++) {
+                    view.setUint8(offset + i, string.charCodeAt(i));
+                }
+            }
+
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, 36 + dataSize, true);
+            writeString(view, 8, 'WAVE');
+            writeString(view, 12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);
+            view.setUint16(22, numChannels, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, byteRate, true);
+            view.setUint16(32, blockAlign, true);
+            view.setUint16(34, 16, true);
+            writeString(view, 36, 'data');
+            view.setUint32(40, dataSize, true);
+
+            for (let i = 0; i < pcmData.length; i++) {
+                view.setInt16(44 + i * 2, pcmData[i], true);
+            }
+
+            return new Blob([view], { type: 'audio/wav' });
+        }
+
     </script>
 </body>
 </html>
+
